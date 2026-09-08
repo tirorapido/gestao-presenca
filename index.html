@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>Tiro Rápido — Ponto Eletrônico</title>
+<title>Tiro Rápido — Gestão de Presença</title>
 <style>
   * { box-sizing: border-box; }
   body {
@@ -129,6 +129,7 @@
 
 <header>
   <h1>TIRO<span>O</span> RÁPIDO</h1>
+  <div class="sub">Gestão de Presença</div>
 </header>
 
 <div class="container" id="app">
@@ -199,6 +200,9 @@ function formatarHoras(horasDecimais) {
   const m = Math.round((horasDecimais - h) * 60);
   return `${h}h${m.toString().padStart(2,'0')}`;
 }
+function formatarMoeda(valor) {
+  return (valor || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
 function diasCorridosNoMes(mes) {
   const [ano, mesNum] = mes.split('-').map(Number);
   const ultimoDiaDoMes = new Date(ano, mesNum, 0).getDate();
@@ -250,6 +254,8 @@ async function getRegistrosMEIDoDia(data, colaboradorId) {
   resultado.homeoffice = homeSnap.exists() ? homeSnap.data() : null;
   const obsSnap = await getDoc(doc(db, "registros", `${data}_${colaboradorId}_obs`));
   resultado.obs = obsSnap.exists() ? obsSnap.data() : null;
+  const faltaSnap = await getDoc(doc(db, "registros", `${data}_${colaboradorId}_falta`));
+  resultado.faltaDoc = faltaSnap.exists() ? faltaSnap.data() : null;
   return resultado;
 }
 async function salvarRegistroMEI(data, colaboradorId, unidade) {
@@ -298,17 +304,19 @@ async function telaAcaoColaborador(colaboradorId) {
     obsAtual = reg.observacaoColaborador || '';
     html += `
       <div class="status-box">
-        <div class="row"><span>Modalidade</span> <span class="${reg.modalidade ? 'status-ok' : 'status-pending'}">${reg.modalidade ? (reg.modalidade === 'presencial' ? '🏢 Presencial' : '🏠 Home Office') : 'não escolhida'}</span></div>
+        <div class="row"><span>Modalidade</span> <span class="${reg.modalidade ? 'status-ok' : 'status-pending'}">${reg.modalidade ? (reg.modalidade === 'presencial' ? `🏢 Presencial — ${reg.unidade || ''}` : '🏠 Home Office') : 'não escolhida'}</span></div>
         <div class="row"><span>Entrada</span> <span class="${reg.entrada ? 'status-ok' : 'status-pending'}">${reg.entrada || 'não registrada'}</span></div>
         <div class="row"><span>Saída almoço</span> <span class="${reg.saidaAlmoco ? 'status-ok' : 'status-pending'}">${reg.saidaAlmoco || 'não registrada'}</span></div>
         <div class="row"><span>Retorno almoço</span> <span class="${reg.retornoAlmoco ? 'status-ok' : 'status-pending'}">${reg.retornoAlmoco || 'não registrado'}</span></div>
         <div class="row"><span>Saída</span> <span class="${reg.saida ? 'status-ok' : 'status-pending'}">${reg.saida || 'não registrada'}</span></div>
-        <div class="row"><span>➕ Plantão extra</span> <span class="${plantaoExtra ? 'status-ok' : 'status-pending'}">${plantaoExtra ? 'Confirmado às ' + plantaoExtra.hora : 'não registrado'}</span></div>
+        <div class="row"><span>➕ Plantão extra</span> <span class="${plantaoExtra ? 'status-ok' : 'status-pending'}">${plantaoExtra ? `Confirmado às ${plantaoExtra.hora} — ${plantaoExtra.unidade}` : 'não registrado'}</span></div>
       </div>
     `;
     if (!reg.modalidade) {
-      html += `<button class="action-btn presenca" onclick="window.__registrarModalidade('${colaboradorId}','presencial')">🏢 Hoje é Presencial</button>`;
-      html += `<button class="action-btn saida" onclick="window.__registrarModalidade('${colaboradorId}','home_office')">🏠 Hoje é Home Office</button>`;
+      html += `<p style="font-size:13px;font-weight:bold;color:#555;margin-bottom:8px;">Presencial — em qual unidade?</p>`;
+      html += `<button class="action-btn presenca" onclick="window.__registrarModalidade('${colaboradorId}','presencial','Buritis')">🏢 Presencial — Buritis</button>`;
+      html += `<button class="action-btn presenca" onclick="window.__registrarModalidade('${colaboradorId}','presencial','Pampulha')">🏢 Presencial — Pampulha</button>`;
+      html += `<button class="action-btn saida" onclick="window.__registrarModalidade('${colaboradorId}','home_office',null)">🏠 Hoje é Home Office</button>`;
     } else if (!reg.entrada) {
       html += `<button class="action-btn entrada" onclick="window.__registrarPonto('${colaboradorId}','entrada')">✅ Registrar Entrada</button>`;
     } else if (!reg.saidaAlmoco) {
@@ -321,7 +329,9 @@ async function telaAcaoColaborador(colaboradorId) {
       html += `<p style="text-align:center;color:#1e7a46;font-weight:bold;">Ponto do dia já registrado!</p>`;
     }
     if (!plantaoExtra) {
-      html += `<button class="action-btn falta" style="background:#E2001A;margin-top:10px;" onclick="window.__registrarPlantaoExtra('${colaboradorId}')">➕ Registrar Plantão Extra</button>`;
+      html += `<p style="font-size:13px;font-weight:bold;color:#555;margin-top:14px;margin-bottom:8px;">➕ Fez um plantão extra? Em qual unidade?</p>`;
+      html += `<button class="action-btn falta" style="background:#E2001A;" onclick="window.__registrarPlantaoExtraCLT('${colaboradorId}','Buritis')">➕ Plantão Extra — Buritis</button>`;
+      html += `<button class="action-btn falta" style="background:#E2001A;" onclick="window.__registrarPlantaoExtraCLT('${colaboradorId}','Pampulha')">➕ Plantão Extra — Pampulha</button>`;
     } else {
       html += `<p style="text-align:center;color:#E2001A;font-weight:bold;margin-top:10px;">➕ Plantão extra já registrado hoje!</p>`;
     }
@@ -385,10 +395,10 @@ window.__registrarPonto = async (colaboradorId, campo) => {
   telaAcaoColaborador(colaboradorId);
 };
 
-window.__registrarModalidade = async (colaboradorId, modalidade) => {
+window.__registrarModalidade = async (colaboradorId, modalidade, unidade) => {
   const data = todayStr();
-  await salvarRegistro(data, colaboradorId, { modalidade });
-  toast(modalidade === 'presencial' ? '🏢 Modalidade: Presencial' : '🏠 Modalidade: Home Office');
+  await salvarRegistro(data, colaboradorId, { modalidade, unidade: unidade || null });
+  toast(modalidade === 'presencial' ? `🏢 Modalidade: Presencial — ${unidade}` : '🏠 Modalidade: Home Office');
   telaAcaoColaborador(colaboradorId);
 };
 
@@ -412,6 +422,14 @@ window.__registrarPlantaoExtra = async (colaboradorId) => {
   const ref = doc(db, "registros", `${data}_${colaboradorId}_extra`);
   await setDoc(ref, { data, colaboradorId, tipo: 'plantao_extra', hora: nowTime() }, { merge: true });
   toast('Plantão extra registrado!');
+  telaAcaoColaborador(colaboradorId);
+};
+
+window.__registrarPlantaoExtraCLT = async (colaboradorId, unidade) => {
+  const data = todayStr();
+  const ref = doc(db, "registros", `${data}_${colaboradorId}_extra`);
+  await setDoc(ref, { data, colaboradorId, tipo: 'plantao_extra', hora: nowTime(), unidade }, { merge: true });
+  toast(`Plantão extra registrado — ${unidade}!`);
   telaAcaoColaborador(colaboradorId);
 };
 
@@ -469,6 +487,12 @@ async function telaGestorPainel() {
         <option value="mei">MEI (presença por unidade)</option>
       </select>
       <div id="gExtra"></div>
+      <label>💰 Valores para cálculo de pagamento (opcional)</label>
+      <div class="row-flex">
+        <div><label style="font-weight:normal;">Valor da diária (R$)</label><input id="gValorDiaria" type="number" step="0.01" min="0" placeholder="Ex: 150.00"></div>
+        <div><label style="font-weight:normal;">Valor da passagem (R$)</label><input id="gValorPassagem" type="number" step="0.01" min="0" placeholder="Ex: 20.00"></div>
+      </div>
+      <div><label style="font-weight:normal;">Valor do plantão extra (R$)</label><input id="gValorPlantaoExtra" type="number" step="0.01" min="0" placeholder="Ex: 100.00"></div>
       <button class="action-btn entrada" onclick="window.__salvarColaborador()">+ Adicionar</button>
     </div>
 
@@ -569,9 +593,39 @@ window.__atualizarExtraRegime = () => {
       <div class="row-flex">
         <div><label>Entrada padrão</label><input id="gEntrada" type="time" value="09:00"></div>
         <div><label>Saída padrão</label><input id="gSaida" type="time" value="18:00"></div>
+      </div>
+      <p style="font-size:12px;color:#666;margin-top:14px;margin-bottom:4px;"><strong>Valores (R$) — usados no relatório financeiro</strong></p>
+      <div class="row-flex">
+        <div><label>Salário</label><input id="gSalario" type="number" step="0.01" min="0" placeholder="0,00"></div>
+        <div><label>Valor diária (conta mesmo em home office)</label><input id="gValorDiaria" type="number" step="0.01" min="0" placeholder="0,00"></div>
+      </div>
+      <div class="row-flex">
+        <div><label>Valor passagem (por dia presencial)</label><input id="gValorPassagem" type="number" step="0.01" min="0" placeholder="0,00"></div>
+        <div><label>Valor falta (desconto)</label><input id="gValorFalta" type="number" step="0.01" min="0" placeholder="0,00"></div>
+      </div>
+      <div class="row-flex">
+        <div><label>Valor plantão extra</label><input id="gValorPlantaoExtra" type="number" step="0.01" min="0" placeholder="0,00"></div>
+      </div>
+      <div class="row-flex">
+        <div><label>Valor dobra — Buritis</label><input id="gValorDobraBuritisCLT" type="number" step="0.01" min="0" placeholder="0,00"></div>
+        <div><label>Valor dobra — Pampulha</label><input id="gValorDobraPampulhaCLT" type="number" step="0.01" min="0" placeholder="0,00"></div>
       </div>`;
   } else {
-    extra.innerHTML = `<p style="font-size:12px;color:#666;">Presença registrada por unidade (Buritis/Pampulha), plantão extra e home office.</p>`;
+    extra.innerHTML = `
+      <p style="font-size:12px;color:#666;">Presença registrada por unidade (Buritis/Pampulha), plantão extra e home office.</p>
+      <p style="font-size:12px;color:#666;margin-top:14px;margin-bottom:4px;"><strong>Valores (R$) — usados no relatório financeiro</strong></p>
+      <div class="row-flex">
+        <div><label>Valor diária (conta mesmo em home office)</label><input id="gValorDiaria" type="number" step="0.01" min="0" placeholder="0,00"></div>
+        <div><label>Valor passagem (por dia presencial)</label><input id="gValorPassagem" type="number" step="0.01" min="0" placeholder="0,00"></div>
+      </div>
+      <div class="row-flex">
+        <div><label>Valor falta (desconto)</label><input id="gValorFalta" type="number" step="0.01" min="0" placeholder="0,00"></div>
+        <div><label>Valor plantão extra</label><input id="gValorPlantaoExtra" type="number" step="0.01" min="0" placeholder="0,00"></div>
+      </div>
+      <div class="row-flex">
+        <div><label>Valor dobra — Buritis</label><input id="gValorDobraBuritis" type="number" step="0.01" min="0" placeholder="0,00"></div>
+        <div><label>Valor dobra — Pampulha</label><input id="gValorDobraPampulha" type="number" step="0.01" min="0" placeholder="0,00"></div>
+      </div>`;
   }
 };
 
@@ -580,10 +634,27 @@ window.__salvarColaborador = async () => {
   const regime = document.getElementById('gRegime').value;
   if (!nome) { toast('Digite o nome.'); return; }
 
+  const numOrZero = (id) => parseFloat(document.getElementById(id).value) || 0;
+
   const dadosColaborador = { nome, regime };
+
   if (regime === 'clt') {
     dadosColaborador.entradaPadrao = document.getElementById('gEntrada').value;
     dadosColaborador.saidaPadrao = document.getElementById('gSaida').value;
+    dadosColaborador.salario = numOrZero('gSalario');
+    dadosColaborador.valorDiaria = numOrZero('gValorDiaria');
+    dadosColaborador.valorPassagem = numOrZero('gValorPassagem');
+    dadosColaborador.valorFalta = numOrZero('gValorFalta');
+    dadosColaborador.valorPlantaoExtra = numOrZero('gValorPlantaoExtra');
+    dadosColaborador.valorDobraBuritis = numOrZero('gValorDobraBuritisCLT');
+    dadosColaborador.valorDobraPampulha = numOrZero('gValorDobraPampulhaCLT');
+  } else {
+    dadosColaborador.valorDiaria = numOrZero('gValorDiaria');
+    dadosColaborador.valorPassagem = numOrZero('gValorPassagem');
+    dadosColaborador.valorFalta = numOrZero('gValorFalta');
+    dadosColaborador.valorPlantaoExtra = numOrZero('gValorPlantaoExtra');
+    dadosColaborador.valorDobraBuritis = numOrZero('gValorDobraBuritis');
+    dadosColaborador.valorDobraPampulha = numOrZero('gValorDobraPampulha');
   }
 
   if (editandoColaboradorId) {
@@ -632,6 +703,20 @@ window.__editarColaborador = (id) => {
   if (c.regime === 'clt') {
     document.getElementById('gEntrada').value = c.entradaPadrao || '09:00';
     document.getElementById('gSaida').value = c.saidaPadrao || '18:00';
+    document.getElementById('gSalario').value = c.salario || '';
+    document.getElementById('gValorDiaria').value = c.valorDiaria || '';
+    document.getElementById('gValorPassagem').value = c.valorPassagem || '';
+    document.getElementById('gValorFalta').value = c.valorFalta || '';
+    document.getElementById('gValorPlantaoExtra').value = c.valorPlantaoExtra || '';
+    document.getElementById('gValorDobraBuritisCLT').value = c.valorDobraBuritis || '';
+    document.getElementById('gValorDobraPampulhaCLT').value = c.valorDobraPampulha || '';
+  } else {
+    document.getElementById('gValorDiaria').value = c.valorDiaria || '';
+    document.getElementById('gValorPassagem').value = c.valorPassagem || '';
+    document.getElementById('gValorFalta').value = c.valorFalta || '';
+    document.getElementById('gValorPlantaoExtra').value = c.valorPlantaoExtra || '';
+    document.getElementById('gValorDobraBuritis').value = c.valorDobraBuritis || '';
+    document.getElementById('gValorDobraPampulha').value = c.valorDobraPampulha || '';
   }
 
   const btn = document.querySelector('#gNome').closest('.card').querySelector('button.action-btn');
@@ -699,6 +784,12 @@ window.__carregarPontoParaEdicao = async () => {
         <option value="presencial" ${reg.modalidade === 'presencial' ? 'selected' : ''}>🏢 Presencial</option>
         <option value="home_office" ${reg.modalidade === 'home_office' ? 'selected' : ''}>🏠 Home Office</option>
       </select>
+      <label>Unidade (se presencial)</label>
+      <select id="eUnidadeCLT">
+        <option value="">— não informada —</option>
+        <option value="Buritis" ${reg.unidade === 'Buritis' ? 'selected' : ''}>Buritis</option>
+        <option value="Pampulha" ${reg.unidade === 'Pampulha' ? 'selected' : ''}>Pampulha</option>
+      </select>
       <div class="row-flex">
         <div><label>Entrada</label><input type="time" id="eEntrada" value="${reg.entrada || ''}"></div>
         <div><label>Saída almoço</label><input type="time" id="eSaidaAlmoco" value="${reg.saidaAlmoco || ''}"></div>
@@ -710,8 +801,13 @@ window.__carregarPontoParaEdicao = async () => {
       <div class="checkbox-line">
         <input type="checkbox" id="eExtraCLT" ${extra ? 'checked' : ''}>
         <label for="eExtraCLT">➕ Plantão extra</label>
-        <input type="time" id="eExtraCLTHora" value="${extra ? extra.hora : ''}" style="max-width:110px;margin:0 0 0 auto;">
+        <input type="time" id="eExtraCLTHora" value="${extra ? extra.hora : ''}" style="max-width:90px;margin:0 0 0 auto;">
       </div>
+      <select id="eExtraCLTUnidade" style="margin-top:-4px;">
+        <option value="">— unidade do plantão extra —</option>
+        <option value="Buritis" ${extra && extra.unidade === 'Buritis' ? 'selected' : ''}>Buritis</option>
+        <option value="Pampulha" ${extra && extra.unidade === 'Pampulha' ? 'selected' : ''}>Pampulha</option>
+      </select>
       <label>Observação do colaborador</label>
       <textarea id="eObs" rows="2">${reg.observacaoColaborador || ''}</textarea>
       <button class="action-btn entrada" onclick="window.__salvarEdicaoCLT('${colaboradorId}','${data}')">💾 Salvar correção</button>
@@ -719,6 +815,10 @@ window.__carregarPontoParaEdicao = async () => {
   } else {
     const regs = await getRegistrosMEIDoDia(data, colaboradorId);
     div.innerHTML = `
+      <div class="checkbox-line">
+        <input type="checkbox" id="eFaltaMEI" ${regs.faltaDoc && regs.faltaDoc.falta === true ? 'checked' : ''}>
+        <label for="eFaltaMEI">Marcar como falta neste dia</label>
+      </div>
       ${UNIDADES_MEI.map(u => `
         <div class="checkbox-line">
           <input type="checkbox" id="eUnidade_${u}" ${regs[u] ? 'checked' : ''}>
@@ -746,6 +846,7 @@ window.__carregarPontoParaEdicao = async () => {
 window.__salvarEdicaoCLT = async (colaboradorId, data) => {
   const falta = document.getElementById('eFalta').checked;
   const modalidade = document.getElementById('eModalidade').value;
+  const unidade = document.getElementById('eUnidadeCLT').value;
   const entrada = document.getElementById('eEntrada').value;
   const saidaAlmoco = document.getElementById('eSaidaAlmoco').value;
   const retornoAlmoco = document.getElementById('eRetornoAlmoco').value;
@@ -755,6 +856,7 @@ window.__salvarEdicaoCLT = async (colaboradorId, data) => {
   await setDoc(doc(db, "registros", `${data}_${colaboradorId}`), {
     data, colaboradorId, falta,
     modalidade: modalidade || null,
+    unidade: unidade || null,
     entrada: entrada || null,
     saidaAlmoco: saidaAlmoco || null,
     retornoAlmoco: retornoAlmoco || null,
@@ -766,7 +868,8 @@ window.__salvarEdicaoCLT = async (colaboradorId, data) => {
   const extraRef = doc(db, "registros", `${data}_${colaboradorId}_extra`);
   if (extraChecked) {
     const hora = document.getElementById('eExtraCLTHora').value || nowTime();
-    await setDoc(extraRef, { data, colaboradorId, tipo: 'plantao_extra', hora });
+    const extraUnidade = document.getElementById('eExtraCLTUnidade').value || null;
+    await setDoc(extraRef, { data, colaboradorId, tipo: 'plantao_extra', hora, unidade: extraUnidade });
   } else {
     await deleteDoc(extraRef).catch(() => {});
   }
@@ -776,6 +879,14 @@ window.__salvarEdicaoCLT = async (colaboradorId, data) => {
 };
 
 window.__salvarEdicaoMEI = async (colaboradorId, data) => {
+  const faltaChecked = document.getElementById('eFaltaMEI').checked;
+  const faltaRef = doc(db, "registros", `${data}_${colaboradorId}_falta`);
+  if (faltaChecked) {
+    await setDoc(faltaRef, { data, colaboradorId, falta: true });
+  } else {
+    await deleteDoc(faltaRef).catch(() => {});
+  }
+
   for (const u of UNIDADES_MEI) {
     const checked = document.getElementById(`eUnidade_${u}`).checked;
     const ref = doc(db, "registros", `${data}_${colaboradorId}_${u}`);
@@ -895,14 +1006,15 @@ function gerarDetalheDias(c, doColab, ocorrDoColab) {
   if (c.regime === 'clt') {
     doColab.forEach(r => {
       const dia = ensureDay(r.data);
+      if (r.unidade) dia.unidadesCount++;
       if (r.tipo === 'plantao_extra') {
-        dia.eventos.push('Plantão extra');
+        dia.eventos.push(`Plantão extra${r.unidade ? ' — ' + r.unidade : ''}`);
         return;
       }
       if (r.falta === true) {
         dia.eventos.push('Falta');
       } else {
-        const modal = r.modalidade === 'presencial' ? 'Presencial' : (r.modalidade === 'home_office' ? 'Home Office' : '');
+        const modal = r.modalidade === 'presencial' ? `Presencial${r.unidade ? ' — ' + r.unidade : ''}` : (r.modalidade === 'home_office' ? 'Home Office' : '');
         let horario = '';
         if (r.entrada && r.saida) {
           const almoco = (r.saidaAlmoco && r.retornoAlmoco) ? `, almoço ${r.saidaAlmoco}–${r.retornoAlmoco}` : '';
@@ -917,6 +1029,7 @@ function gerarDetalheDias(c, doColab, ocorrDoColab) {
   } else {
     doColab.forEach(r => {
       const dia = ensureDay(r.data);
+      if (r.falta === true) dia.eventos.push('Falta');
       if (r.unidade) { dia.eventos.push(r.unidade); dia.unidadesCount++; }
       if (r.tipo === 'plantao_extra') dia.eventos.push('Plantão extra');
       if (r.tipo === 'home_office') dia.eventos.push('Home Office');
@@ -939,7 +1052,7 @@ function gerarDetalheDias(c, doColab, ocorrDoColab) {
       obsColaborador: dia.obsColaborador,
       ocorrenciaTipo: dia.ocorrenciaTipo,
       obsGestor: dia.obsGestor,
-      destaque: (c.regime === 'mei' && dia.unidadesCount >= 2) ? 'DIA COM 2 UNIDADES' : '',
+      destaque: dia.unidadesCount >= 2 ? 'DIA COM 2 UNIDADES' : '',
     }));
 }
 
@@ -974,17 +1087,48 @@ window.__gerarRelatorio = async () => {
         const diasPresencial = doColab.filter(r => r.modalidade === 'presencial').length;
         const diasHomeOffice = doColab.filter(r => r.modalidade === 'home_office').length;
         const plantoesExtrasCLT = doColab.filter(r => r.tipo === 'plantao_extra').length;
+
+        // Dias com registro (para diária, conta presencial + home office)
+        const datasComRegistroCLT = new Set(
+          doColab.filter(r => r.entrada || r.modalidade || r.tipo === 'plantao_extra').map(r => r.data)
+        );
+
+        // Dobra: dia em que a unidade do plantão normal difere da unidade do plantão extra
+        const porDiaUnidadeCLT = {};
+        doColab.forEach(r => {
+          if (r.unidade) {
+            if (!porDiaUnidadeCLT[r.data]) porDiaUnidadeCLT[r.data] = new Set();
+            porDiaUnidadeCLT[r.data].add(r.unidade);
+          }
+        });
+        const diasDuplaUnidadeCLT = Object.values(porDiaUnidadeCLT).filter(s => s.size >= 2).length;
+
+        const valorSalario = c.salario || 0;
+        const valorDiariaTotal = datasComRegistroCLT.size * (c.valorDiaria || 0);
+        const valorPassagemTotal = diasPresencial * (c.valorPassagem || 0);
+        const valorExtraTotal = plantoesExtrasCLT * (c.valorPlantaoExtra || 0);
+        const valorDobraTotal = diasDuplaUnidadeCLT * ((c.valorDobraBuritis || 0) + (c.valorDobraPampulha || 0));
+        const valorFaltaTotal = faltas * (c.valorFalta || 0);
+        const valorTotal = valorSalario + valorDiariaTotal + valorPassagemTotal + valorExtraTotal + valorDobraTotal - valorFaltaTotal;
+
         return {
           nome: c.nome, regime: c.regime,
           presenca: `${diasPresenca} dias`,
           faltas: `${faltas} falta(s)`,
           faltasCor: faltas > 0 ? '#c0392b' : '#1e7a46',
-          plantaoOutraUnidade: '0',
+          plantaoOutraUnidade: `${diasDuplaUnidadeCLT}`,
           plantaoExtra: `${plantoesExtrasCLT}`,
           horas: formatarHoras(totalHoras),
           modalidade: `🏢 ${diasPresencial} · 🏠 ${diasHomeOffice}`,
           ocorrencias: resumoOcorrencias,
           detalheDias,
+          valorBase: formatarMoeda(valorSalario + valorDiariaTotal),
+          valorBaseLabel: 'Salário + Diárias',
+          valorPassagemTotal: formatarMoeda(valorPassagemTotal),
+          valorExtraTotal: formatarMoeda(valorExtraTotal),
+          valorDobraTotal: formatarMoeda(valorDobraTotal),
+          valorFaltaTotal: formatarMoeda(valorFaltaTotal),
+          valorTotal: formatarMoeda(valorTotal),
         };
       } else {
         const porDiaUnidade = {};
@@ -996,25 +1140,40 @@ window.__gerarRelatorio = async () => {
         const diasDuplaUnidade = Object.values(porDiaUnidade).filter(u => u.length >= 2).length;
         const plantoesExtras = doColab.filter(r => r.tipo === 'plantao_extra').length;
         const diasComHomeOffice = new Set(doColab.filter(r => r.tipo === 'home_office').map(r => r.data)).size;
+        const totalVisitasUnidade = doColab.filter(r => r.unidade).length; // conta cada trajeto, inclusive nos dias dobrados
 
         const datasComRegistro = new Set(
           doColab.filter(r => r.unidade || r.tipo === 'plantao_extra' || r.tipo === 'home_office').map(r => r.data)
         );
 
-        const diasNoMes = diasCorridosNoMes(mes);
-        const todasDatas = gerarDatasDoMes(mes, diasNoMes);
-        const diasFaltantes = todasDatas.filter(d => !datasComRegistro.has(d) && !datasComOcorrencia.has(d)).length;
+        // Falta é sempre manual — marcada pelo gestor em "Editar ponto de um colaborador"
+        const faltas = doColab.filter(r => r.falta === true && !datasComOcorrencia.has(r.data)).length;
+
+        const valorDiariaTotal = datasComRegistro.size * (c.valorDiaria || 0);
+        const valorPassagemTotal = totalVisitasUnidade * (c.valorPassagem || 0);
+        const valorExtraTotal = plantoesExtras * (c.valorPlantaoExtra || 0);
+        const valorDobraTotal = diasDuplaUnidade * ((c.valorDobraBuritis || 0) + (c.valorDobraPampulha || 0));
+        const valorFaltaTotal = faltas * (c.valorFalta || 0);
+        const valorTotal = valorDiariaTotal + valorPassagemTotal + valorExtraTotal + valorDobraTotal - valorFaltaTotal;
 
         return {
           nome: c.nome, regime: c.regime,
           presenca: `${datasComRegistro.size} dias`,
-          faltas: `${diasFaltantes} falta(s)`,
-          faltasCor: diasFaltantes > 0 ? '#c0392b' : '#1e7a46',
+          faltas: `${faltas} falta(s)`,
+          faltasCor: faltas > 0 ? '#c0392b' : '#1e7a46',
           plantaoOutraUnidade: `${diasDuplaUnidade}`,
           plantaoExtra: `${plantoesExtras}`,
           horas: '—',
           modalidade: `🏢 ${diasComUnidade} · 🏠 ${diasComHomeOffice}`,
           ocorrencias: resumoOcorrencias,
+          detalheDias,
+          valorBase: formatarMoeda(valorDiariaTotal),
+          valorBaseLabel: 'Diárias',
+          valorPassagemTotal: formatarMoeda(valorPassagemTotal),
+          valorExtraTotal: formatarMoeda(valorExtraTotal),
+          valorDobraTotal: formatarMoeda(valorDobraTotal),
+          valorFaltaTotal: formatarMoeda(valorFaltaTotal),
+          valorTotal: formatarMoeda(valorTotal),
           detalheDias,
         };
       }
@@ -1022,12 +1181,16 @@ window.__gerarRelatorio = async () => {
 
     ultimoRelatorio = { mes, linhas };
 
+    const parseMoeda = (str) => parseFloat(String(str).replace(/[^\d,-]/g, '').replace(',', '.')) || 0;
+    const totalGeralMes = linhas.reduce((soma, l) => soma + parseMoeda(l.valorTotal), 0);
+
     div.innerHTML = `
       <table>
         <tr>
           <th>Nome</th><th>Regime</th><th>Presença</th><th>Faltas</th>
           <th>Plantão outra unidade</th><th>Plantão(ões) extra(s)</th>
           <th>Horas</th><th>Presencial · Home Office</th>
+          <th>Salário/Diárias</th><th>Passagem</th><th>Extra (R$)</th><th>Dobra (R$)</th><th>Desconto falta</th><th>Total a pagar</th>
         </tr>
         ${linhas.map(l => `
           <tr>
@@ -1039,8 +1202,18 @@ window.__gerarRelatorio = async () => {
             <td>${l.plantaoExtra}</td>
             <td>${l.horas}</td>
             <td style="font-size:11px;">${l.modalidade}</td>
+            <td>${l.valorBase}</td>
+            <td>${l.valorPassagemTotal}</td>
+            <td>${l.valorExtraTotal}</td>
+            <td>${l.valorDobraTotal}</td>
+            <td style="color:#c0392b;">${l.valorFaltaTotal}</td>
+            <td style="font-weight:bold;color:#1e7a46;">${l.valorTotal}</td>
           </tr>
         `).join('')}
+        <tr>
+          <td colspan="13" style="text-align:right;font-weight:bold;">TOTAL GERAL DO MÊS</td>
+          <td style="font-weight:bold;color:#0A0A0A;background:#F0EEE8;">${formatarMoeda(totalGeralMes)}</td>
+        </tr>
       </table>
 
       <details style="margin-top:14px;">
@@ -1087,31 +1260,40 @@ window.__exportarRelatorioCSV = () => {
   const cabecalho = [
     'Nome / Data', 'Regime / O que aconteceu', 'Presença', 'Faltas',
     'Plantão outra unidade', 'Plantão(ões) extra(s)', 'Horas', 'Presencial · Home Office',
+    'Salário/Diárias (R$)', 'Passagem (R$)', 'Extra (R$)', 'Dobra (R$)', 'Desconto falta (R$)', 'Total a pagar (R$)',
     'Observação do colaborador', 'Ocorrência', 'Observação do gestor', 'Alerta'
   ];
 
   const linhasCSV = [];
+  let totalGeral = 0;
+  const parseMoeda = (str) => parseFloat(String(str).replace(/[^\d,-]/g, '').replace(',', '.')) || 0;
+
   ultimoRelatorio.linhas.forEach(l => {
-    // Linha-resumo do colaborador (nome + dados do mês)
+    totalGeral += parseMoeda(l.valorTotal);
+    // Linha-resumo do colaborador (nome + dados do mês + valores financeiros)
     linhasCSV.push([
       l.nome, l.regime.toUpperCase(), l.presenca, l.faltas,
       l.plantaoOutraUnidade, l.plantaoExtra, l.horas, l.modalidade,
+      l.valorBase, l.valorPassagemTotal, l.valorExtraTotal, l.valorDobraTotal, l.valorFaltaTotal, l.valorTotal,
       '', '', '', ''
     ]);
     // Uma linha para cada dia com o que aconteceu naquele dia, em colunas separadas
     if (l.detalheDias.length === 0) {
-      linhasCSV.push(['—', 'Nenhum registro neste mês', '', '', '', '', '', '', '', '', '', '']);
+      linhasCSV.push(['—', 'Nenhum registro neste mês', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
     } else {
       l.detalheDias.forEach(d => {
         linhasCSV.push([
-          fmtDatePt(d.data), d.evento, '', '', '', '', '', '',
+          fmtDatePt(d.data), d.evento, '', '', '', '', '', '', '', '', '', '', '', '',
           d.obsColaborador || '', d.ocorrenciaTipo || '', d.obsGestor || '', d.destaque || ''
         ]);
       });
     }
     // Linha em branco separando um colaborador do próximo
-    linhasCSV.push(['', '', '', '', '', '', '', '', '', '', '', '']);
+    linhasCSV.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
   });
+
+  // Linha de total geral do mês, no final do arquivo
+  linhasCSV.push(['TOTAL GERAL DO MÊS', '', '', '', '', '', '', '', '', '', '', '', '', formatarMoeda(totalGeral), '', '', '', '']);
 
   const escapar = (valor) => `"${String(valor).replace(/"/g, '""')}"`;
   const conteudo = [cabecalho, ...linhasCSV]
