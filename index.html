@@ -1089,11 +1089,69 @@ window.__removerOcorrencia = async (id) => {
   window.__gerarRelatorio();
 };
 
+function calcularValorDoDia(c, dia) {
+  const regs = dia.registros;
+  const temOcorrenciaJustificando = !!dia.ocorrenciaTipo;
+  let valor = 0;
+
+  if (c.regime === 'clt') {
+    const faltaReg = regs.find(r => r.falta === true);
+    if (faltaReg && !temOcorrenciaJustificando) {
+      valor -= (c.valorFalta || 0);
+      return valor; // dia de falta não soma mais nada além do desconto
+    }
+
+    const temRegistroPrincipal = regs.some(r => r.entrada || r.modalidade);
+    if (temRegistroPrincipal) {
+      valor += ehDiaEspecial(dia.data) ? (c.valorDiariaEspecial || c.valorDiaria || 0) : (c.valorDiaria || 0);
+    }
+    const regPresencial = regs.find(r => r.modalidade === 'presencial');
+    if (regPresencial) valor += (c.valorPassagem || 0);
+
+    const extraReg = regs.find(r => r.tipo === 'plantao_extra');
+    if (extraReg) valor += (c.valorPlantaoExtra || 0);
+
+    const unidadesDoDia = regs.filter(r => r.unidade).map(r => ({ unidade: r.unidade, hora: r.entrada || r.hora || '00:00' }));
+    const unidadesUnicas = new Set(unidadesDoDia.map(u => u.unidade));
+    if (unidadesUnicas.size >= 2) {
+      const ordenados = [...unidadesDoDia].sort((a, b) => a.hora.localeCompare(b.hora));
+      const unidadeExtra = ordenados[ordenados.length - 1].unidade;
+      valor += unidadeExtra === 'Buritis' ? (c.valorDobraBuritis || 0) : (c.valorDobraPampulha || 0);
+    }
+  } else {
+    const faltaReg = regs.find(r => r.falta === true);
+    if (faltaReg && !temOcorrenciaJustificando) {
+      valor -= (c.valorFalta || 0);
+      return valor;
+    }
+
+    const unidadesDoDia = regs.filter(r => r.unidade).map(r => ({ unidade: r.unidade, hora: r.hora || '00:00' }));
+    const temHomeOffice = regs.some(r => r.tipo === 'home_office');
+    const temExtra = regs.some(r => r.tipo === 'plantao_extra');
+    const temAlgumRegistro = unidadesDoDia.length > 0 || temHomeOffice || temExtra;
+
+    if (temAlgumRegistro) {
+      valor += ehDiaEspecial(dia.data) ? (c.valorDiariaEspecial || c.valorDiaria || 0) : (c.valorDiaria || 0);
+    }
+    valor += unidadesDoDia.length * (c.valorPassagem || 0);
+    if (temExtra) valor += (c.valorPlantaoExtra || 0);
+
+    const unidadesUnicas = new Set(unidadesDoDia.map(u => u.unidade));
+    if (unidadesUnicas.size >= 2) {
+      const ordenados = [...unidadesDoDia].sort((a, b) => a.hora.localeCompare(b.hora));
+      const unidadeExtra = ordenados[ordenados.length - 1].unidade;
+      valor += unidadeExtra === 'Buritis' ? (c.valorDobraBuritis || 0) : (c.valorDobraPampulha || 0);
+    }
+  }
+
+  return valor;
+}
+
 function gerarDetalheDias(c, doColab, ocorrDoColab) {
   const porData = {};
   const ensureDay = (data) => {
     if (!porData[data]) {
-      porData[data] = { data, eventos: [], unidadesCount: 0, obsColaborador: '', ocorrenciaTipo: '', obsGestor: '' };
+      porData[data] = { data, eventos: [], unidadesCount: 0, obsColaborador: '', ocorrenciaTipo: '', obsGestor: '', registros: [] };
     }
     return porData[data];
   };
@@ -1101,6 +1159,7 @@ function gerarDetalheDias(c, doColab, ocorrDoColab) {
   if (c.regime === 'clt') {
     doColab.forEach(r => {
       const dia = ensureDay(r.data);
+      dia.registros.push(r);
       if (r.unidade) dia.unidadesCount++;
       if (r.tipo === 'plantao_extra') {
         dia.eventos.push(`Plantão extra${r.unidade ? ' — ' + r.unidade : ''}`);
@@ -1124,6 +1183,7 @@ function gerarDetalheDias(c, doColab, ocorrDoColab) {
   } else {
     doColab.forEach(r => {
       const dia = ensureDay(r.data);
+      dia.registros.push(r);
       if (r.falta === true) dia.eventos.push('Falta');
       if (r.unidade) { dia.eventos.push(r.unidade); dia.unidadesCount++; }
       if (r.tipo === 'plantao_extra') dia.eventos.push('Plantão extra');
@@ -1148,6 +1208,7 @@ function gerarDetalheDias(c, doColab, ocorrDoColab) {
       ocorrenciaTipo: dia.ocorrenciaTipo,
       obsGestor: dia.obsGestor,
       destaque: dia.unidadesCount >= 2 ? 'DIA COM 2 UNIDADES' : '',
+      valorDia: formatarMoeda(calcularValorDoDia(c, dia)),
     }));
 }
 
@@ -1192,11 +1253,12 @@ window.__gerarRelatorio = async () => {
         const porDiaUnidadeCLT = {};
         doColab.forEach(r => {
           if (r.unidade) {
-            if (!porDiaUnidadeCLT[r.data]) porDiaUnidadeCLT[r.data] = new Set();
-            porDiaUnidadeCLT[r.data].add(r.unidade);
+            if (!porDiaUnidadeCLT[r.data]) porDiaUnidadeCLT[r.data] = [];
+            // hora de referência: entrada (registro principal) ou hora (plantão extra)
+            porDiaUnidadeCLT[r.data].push({ unidade: r.unidade, hora: r.entrada || r.hora || '00:00' });
           }
         });
-        const diasDuplaUnidadeCLT = Object.values(porDiaUnidadeCLT).filter(s => s.size >= 2).length;
+        const diasDuplaUnidadeCLT = Object.values(porDiaUnidadeCLT).filter(arr => new Set(arr.map(x => x.unidade)).size >= 2).length;
 
         const valorSalario = c.salario || 0;
         const valorDiariaTotal = Array.from(datasComRegistroCLT).reduce((soma, dataDia) => {
@@ -1205,7 +1267,18 @@ window.__gerarRelatorio = async () => {
         }, 0);
         const valorPassagemTotal = diasPresencial * (c.valorPassagem || 0);
         const valorExtraTotal = plantoesExtrasCLT * (c.valorPlantaoExtra || 0);
-        const valorDobraTotal = diasDuplaUnidadeCLT * ((c.valorDobraBuritis || 0) + (c.valorDobraPampulha || 0));
+
+        // Dobra: no dia com 2 unidades, cobra só o valor da unidade "extra" (a segunda visitada no dia, pelo horário)
+        let valorDobraTotal = 0;
+        Object.values(porDiaUnidadeCLT).forEach(registrosDoDia => {
+          const unidadesUnicas = new Set(registrosDoDia.map(x => x.unidade));
+          if (unidadesUnicas.size >= 2) {
+            const ordenados = [...registrosDoDia].sort((a, b) => a.hora.localeCompare(b.hora));
+            const unidadeExtra = ordenados[ordenados.length - 1].unidade;
+            valorDobraTotal += unidadeExtra === 'Buritis' ? (c.valorDobraBuritis || 0) : (c.valorDobraPampulha || 0);
+          }
+        });
+
         const valorFaltaTotal = faltas * (c.valorFalta || 0);
         const valorTotal = valorSalario + valorDiariaTotal + valorPassagemTotal + valorExtraTotal + valorDobraTotal - valorFaltaTotal;
 
@@ -1232,7 +1305,7 @@ window.__gerarRelatorio = async () => {
         const porDiaUnidade = {};
         doColab.filter(r => r.unidade).forEach(r => {
           if (!porDiaUnidade[r.data]) porDiaUnidade[r.data] = [];
-          porDiaUnidade[r.data].push(r.unidade);
+          porDiaUnidade[r.data].push({ unidade: r.unidade, hora: r.hora || '00:00' });
         });
         const diasComUnidade = Object.keys(porDiaUnidade).length;
         const diasDuplaUnidade = Object.values(porDiaUnidade).filter(u => u.length >= 2).length;
@@ -1254,7 +1327,17 @@ window.__gerarRelatorio = async () => {
         }, 0);
         const valorPassagemTotal = totalVisitasUnidade * (c.valorPassagem || 0);
         const valorExtraTotal = plantoesExtras * (c.valorPlantaoExtra || 0);
-        const valorDobraTotal = diasDuplaUnidade * ((c.valorDobraBuritis || 0) + (c.valorDobraPampulha || 0));
+
+        // Dobra: no dia com 2 unidades, cobra só o valor da unidade "extra" (a segunda visitada no dia, pelo horário)
+        let valorDobraTotal = 0;
+        Object.values(porDiaUnidade).forEach(registrosDoDia => {
+          if (registrosDoDia.length >= 2) {
+            const ordenados = [...registrosDoDia].sort((a, b) => a.hora.localeCompare(b.hora));
+            const unidadeExtra = ordenados[ordenados.length - 1].unidade; // a última registrada no dia
+            valorDobraTotal += unidadeExtra === 'Buritis' ? (c.valorDobraBuritis || 0) : (c.valorDobraPampulha || 0);
+          }
+        });
+
         const valorFaltaTotal = faltas * (c.valorFalta || 0);
         const valorTotal = valorDiariaTotal + valorPassagemTotal + valorExtraTotal + valorDobraTotal - valorFaltaTotal;
 
@@ -1329,11 +1412,12 @@ window.__gerarRelatorio = async () => {
               ${l.detalheDias.length === 0
                 ? `<p style="font-size:12px;color:#999;margin:8px 0 0;">Nenhum registro neste mês.</p>`
                 : `<table style="margin-top:8px;">
-                    <tr><th>Data</th><th>O que aconteceu</th><th>Obs. colaborador</th><th>Ocorrência</th><th>Obs. gestor</th><th>Alerta</th></tr>
+                    <tr><th>Data</th><th>O que aconteceu</th><th>Valor do dia</th><th>Obs. colaborador</th><th>Ocorrência</th><th>Obs. gestor</th><th>Alerta</th></tr>
                     ${l.detalheDias.map(d => `
                       <tr>
                         <td style="white-space:nowrap;">${fmtDatePt(d.data)}</td>
                         <td style="font-size:12px;">${d.evento}</td>
+                        <td style="font-size:12px;font-weight:bold;color:${d.valorDia.includes('-') ? '#c0392b' : '#1e7a46'};">${d.valorDia}</td>
                         <td style="font-size:11px;color:#555;">${d.obsColaborador || '—'}</td>
                         <td style="font-size:11px;color:#555;">${d.ocorrenciaTipo || '—'}</td>
                         <td style="font-size:11px;color:#555;">${d.obsGestor || '—'}</td>
@@ -1385,7 +1469,7 @@ window.__exportarRelatorioCSV = () => {
     } else {
       l.detalheDias.forEach(d => {
         linhasCSV.push([
-          fmtDatePt(d.data), d.evento, '', '', '', '', '', '', '', '', '', '', '', '',
+          fmtDatePt(d.data), d.evento, '', '', '', '', '', '', '', '', '', '', '', d.valorDia,
           d.obsColaborador || '', d.ocorrenciaTipo || '', d.obsGestor || '', d.destaque || ''
         ]);
       });
