@@ -203,6 +203,74 @@ function formatarHoras(horasDecimais) {
 function formatarMoeda(valor) {
   return (valor || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
+
+// ============================================================
+// DETECÇÃO DE SÁBADO / DOMINGO / FERIADO
+// ============================================================
+function diaDaSemana(dataISO) {
+  return new Date(dataISO + 'T12:00:00').getDay(); // 0=domingo, 6=sábado
+}
+function ehSabado(dataISO) { return diaDaSemana(dataISO) === 6; }
+function ehDomingo(dataISO) { return diaDaSemana(dataISO) === 0; }
+
+// Calcula a data da Páscoa (algoritmo de Gauss) para achar feriados móveis
+function calcularPascoa(ano) {
+  const a = ano % 19, b = Math.floor(ano / 100), c = ano % 100;
+  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const mes = Math.floor((h + l - 7 * m + 114) / 31);
+  const dia = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(ano, mes - 1, dia);
+}
+function addDias(data, dias) {
+  const d = new Date(data);
+  d.setDate(d.getDate() + dias);
+  return d;
+}
+function paraISO(data) {
+  return data.toISOString().slice(0, 10);
+}
+
+// Feriados nacionais fixos + móveis (calculados a partir da Páscoa)
+function feriadosNacionaisDoAno(ano) {
+  const pascoa = calcularPascoa(ano);
+  const feriados = new Set([
+    `${ano}-01-01`, // Confraternização Universal
+    `${ano}-04-21`, // Tiradentes
+    `${ano}-05-01`, // Dia do Trabalho
+    `${ano}-09-07`, // Independência
+    `${ano}-10-12`, // Nossa Senhora Aparecida
+    `${ano}-11-02`, // Finados
+    `${ano}-11-15`, // Proclamação da República
+    `${ano}-11-20`, // Consciência Negra (feriado nacional desde 2024)
+    `${ano}-12-25`, // Natal
+    paraISO(addDias(pascoa, -47)), // Carnaval (terça-feira)
+    paraISO(addDias(pascoa, -2)),  // Sexta-feira Santa
+    paraISO(addDias(pascoa, 60)),  // Corpus Christi
+  ]);
+  return feriados;
+}
+
+// Feriados extras cadastrados manualmente pelo gestor (municipais/estaduais)
+let feriadosManuais = [];
+async function carregarFeriadosManuais() {
+  try {
+    const snap = await getDoc(doc(db, "configuracoes", "feriados"));
+    feriadosManuais = snap.exists() ? (snap.data().datas || []) : [];
+  } catch (e) {
+    feriadosManuais = [];
+  }
+}
+function ehFeriado(dataISO) {
+  const ano = Number(dataISO.slice(0, 4));
+  return feriadosNacionaisDoAno(ano).has(dataISO) || feriadosManuais.includes(dataISO);
+}
+function ehDiaEspecial(dataISO) {
+  return ehSabado(dataISO) || ehDomingo(dataISO) || ehFeriado(dataISO);
+}
+
 function diasCorridosNoMes(mes) {
   const [ano, mesNum] = mes.split('-').map(Number);
   const ultimoDiaDoMes = new Date(ano, mesNum, 0).getDate();
@@ -487,12 +555,6 @@ async function telaGestorPainel() {
         <option value="mei">MEI (presença por unidade)</option>
       </select>
       <div id="gExtra"></div>
-      <label>💰 Valores para cálculo de pagamento (opcional)</label>
-      <div class="row-flex">
-        <div><label style="font-weight:normal;">Valor da diária (R$)</label><input id="gValorDiaria" type="number" step="0.01" min="0" placeholder="Ex: 150.00"></div>
-        <div><label style="font-weight:normal;">Valor da passagem (R$)</label><input id="gValorPassagem" type="number" step="0.01" min="0" placeholder="Ex: 20.00"></div>
-      </div>
-      <div><label style="font-weight:normal;">Valor do plantão extra (R$)</label><input id="gValorPlantaoExtra" type="number" step="0.01" min="0" placeholder="Ex: 100.00"></div>
       <button class="action-btn entrada" onclick="window.__salvarColaborador()">+ Adicionar</button>
     </div>
 
@@ -569,6 +631,18 @@ async function telaGestorPainel() {
       </details>
     </div>
 
+    <div class="card">
+      <details>
+        <summary style="cursor:pointer;font-size:17px;font-weight:bold;">📅 Feriados municipais/estaduais (extras)</summary>
+        <div style="margin-top:10px;">
+          <p style="font-size:12px;color:#666;">Os feriados nacionais (Natal, Carnaval, Independência, etc.) já são calculados automaticamente. Aqui você cadastra só os feriados extras de Belo Horizonte/MG (ex: 8 de dezembro).</p>
+          <label>Datas (uma por linha, formato AAAA-MM-DD)</label>
+          <textarea id="feriadosTextarea" rows="4" placeholder="2026-12-08">${feriadosManuais.join('\n')}</textarea>
+          <button class="action-btn entrada" onclick="window.__salvarFeriadosManuais()">💾 Salvar feriados extras</button>
+        </div>
+      </details>
+    </div>
+
     <div class="card" style="border:1px solid #f5c6cb;">
       <details>
         <summary style="cursor:pointer;font-size:15px;font-weight:bold;color:#c0392b;">⚠️ Zona de risco — zerar dados para novo teste</summary>
@@ -600,10 +674,11 @@ window.__atualizarExtraRegime = () => {
         <div><label>Valor diária (conta mesmo em home office)</label><input id="gValorDiaria" type="number" step="0.01" min="0" placeholder="0,00"></div>
       </div>
       <div class="row-flex">
+        <div><label>Valor diária — sáb./dom./feriado</label><input id="gValorDiariaEspecial" type="number" step="0.01" min="0" placeholder="0,00"></div>
         <div><label>Valor passagem (por dia presencial)</label><input id="gValorPassagem" type="number" step="0.01" min="0" placeholder="0,00"></div>
-        <div><label>Valor falta (desconto)</label><input id="gValorFalta" type="number" step="0.01" min="0" placeholder="0,00"></div>
       </div>
       <div class="row-flex">
+        <div><label>Valor falta (desconto)</label><input id="gValorFalta" type="number" step="0.01" min="0" placeholder="0,00"></div>
         <div><label>Valor plantão extra</label><input id="gValorPlantaoExtra" type="number" step="0.01" min="0" placeholder="0,00"></div>
       </div>
       <div class="row-flex">
@@ -616,10 +691,13 @@ window.__atualizarExtraRegime = () => {
       <p style="font-size:12px;color:#666;margin-top:14px;margin-bottom:4px;"><strong>Valores (R$) — usados no relatório financeiro</strong></p>
       <div class="row-flex">
         <div><label>Valor diária (conta mesmo em home office)</label><input id="gValorDiaria" type="number" step="0.01" min="0" placeholder="0,00"></div>
-        <div><label>Valor passagem (por dia presencial)</label><input id="gValorPassagem" type="number" step="0.01" min="0" placeholder="0,00"></div>
+        <div><label>Valor diária — sáb./dom./feriado</label><input id="gValorDiariaEspecial" type="number" step="0.01" min="0" placeholder="0,00"></div>
       </div>
       <div class="row-flex">
+        <div><label>Valor passagem (por dia presencial)</label><input id="gValorPassagem" type="number" step="0.01" min="0" placeholder="0,00"></div>
         <div><label>Valor falta (desconto)</label><input id="gValorFalta" type="number" step="0.01" min="0" placeholder="0,00"></div>
+      </div>
+      <div class="row-flex">
         <div><label>Valor plantão extra</label><input id="gValorPlantaoExtra" type="number" step="0.01" min="0" placeholder="0,00"></div>
       </div>
       <div class="row-flex">
@@ -643,6 +721,7 @@ window.__salvarColaborador = async () => {
     dadosColaborador.saidaPadrao = document.getElementById('gSaida').value;
     dadosColaborador.salario = numOrZero('gSalario');
     dadosColaborador.valorDiaria = numOrZero('gValorDiaria');
+    dadosColaborador.valorDiariaEspecial = numOrZero('gValorDiariaEspecial');
     dadosColaborador.valorPassagem = numOrZero('gValorPassagem');
     dadosColaborador.valorFalta = numOrZero('gValorFalta');
     dadosColaborador.valorPlantaoExtra = numOrZero('gValorPlantaoExtra');
@@ -650,6 +729,7 @@ window.__salvarColaborador = async () => {
     dadosColaborador.valorDobraPampulha = numOrZero('gValorDobraPampulhaCLT');
   } else {
     dadosColaborador.valorDiaria = numOrZero('gValorDiaria');
+    dadosColaborador.valorDiariaEspecial = numOrZero('gValorDiariaEspecial');
     dadosColaborador.valorPassagem = numOrZero('gValorPassagem');
     dadosColaborador.valorFalta = numOrZero('gValorFalta');
     dadosColaborador.valorPlantaoExtra = numOrZero('gValorPlantaoExtra');
@@ -705,6 +785,7 @@ window.__editarColaborador = (id) => {
     document.getElementById('gSaida').value = c.saidaPadrao || '18:00';
     document.getElementById('gSalario').value = c.salario || '';
     document.getElementById('gValorDiaria').value = c.valorDiaria || '';
+    document.getElementById('gValorDiariaEspecial').value = c.valorDiariaEspecial || '';
     document.getElementById('gValorPassagem').value = c.valorPassagem || '';
     document.getElementById('gValorFalta').value = c.valorFalta || '';
     document.getElementById('gValorPlantaoExtra').value = c.valorPlantaoExtra || '';
@@ -712,6 +793,7 @@ window.__editarColaborador = (id) => {
     document.getElementById('gValorDobraPampulhaCLT').value = c.valorDobraPampulha || '';
   } else {
     document.getElementById('gValorDiaria').value = c.valorDiaria || '';
+    document.getElementById('gValorDiariaEspecial').value = c.valorDiariaEspecial || '';
     document.getElementById('gValorPassagem').value = c.valorPassagem || '';
     document.getElementById('gValorFalta').value = c.valorFalta || '';
     document.getElementById('gValorPlantaoExtra').value = c.valorPlantaoExtra || '';
@@ -731,6 +813,19 @@ window.__excluirColaborador = async (id) => {
   toast('Colaborador excluído.');
   await carregarColaboradores();
   telaGestorPainel();
+};
+
+window.__salvarFeriadosManuais = async () => {
+  const texto = document.getElementById('feriadosTextarea').value;
+  const datas = texto
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => /^\d{4}-\d{2}-\d{2}$/.test(l));
+
+  await setDoc(doc(db, "configuracoes", "feriados"), { datas });
+  feriadosManuais = datas;
+  toast(`${datas.length} feriado(s) extra(s) salvo(s)!`);
+  window.__gerarRelatorio();
 };
 
 window.__limparTodosOsDados = async () => {
@@ -1104,7 +1199,10 @@ window.__gerarRelatorio = async () => {
         const diasDuplaUnidadeCLT = Object.values(porDiaUnidadeCLT).filter(s => s.size >= 2).length;
 
         const valorSalario = c.salario || 0;
-        const valorDiariaTotal = datasComRegistroCLT.size * (c.valorDiaria || 0);
+        const valorDiariaTotal = Array.from(datasComRegistroCLT).reduce((soma, dataDia) => {
+          const valorDoDia = ehDiaEspecial(dataDia) ? (c.valorDiariaEspecial || c.valorDiaria || 0) : (c.valorDiaria || 0);
+          return soma + valorDoDia;
+        }, 0);
         const valorPassagemTotal = diasPresencial * (c.valorPassagem || 0);
         const valorExtraTotal = plantoesExtrasCLT * (c.valorPlantaoExtra || 0);
         const valorDobraTotal = diasDuplaUnidadeCLT * ((c.valorDobraBuritis || 0) + (c.valorDobraPampulha || 0));
@@ -1149,7 +1247,11 @@ window.__gerarRelatorio = async () => {
         // Falta é sempre manual — marcada pelo gestor em "Editar ponto de um colaborador"
         const faltas = doColab.filter(r => r.falta === true && !datasComOcorrencia.has(r.data)).length;
 
-        const valorDiariaTotal = datasComRegistro.size * (c.valorDiaria || 0);
+        // Diária calculada dia a dia — usa o valor especial em sábado/domingo/feriado
+        const valorDiariaTotal = Array.from(datasComRegistro).reduce((soma, dataDia) => {
+          const valorDoDia = ehDiaEspecial(dataDia) ? (c.valorDiariaEspecial || c.valorDiaria || 0) : (c.valorDiaria || 0);
+          return soma + valorDoDia;
+        }, 0);
         const valorPassagemTotal = totalVisitasUnidade * (c.valorPassagem || 0);
         const valorExtraTotal = plantoesExtras * (c.valorPlantaoExtra || 0);
         const valorDobraTotal = diasDuplaUnidade * ((c.valorDobraBuritis || 0) + (c.valorDobraPampulha || 0));
@@ -1315,6 +1417,7 @@ window.__exportarRelatorioCSV = () => {
 (async function init() {
   try {
     await carregarColaboradores();
+    await carregarFeriadosManuais();
     telaSelecionarColaborador();
   } catch (e) {
     console.error(e);
