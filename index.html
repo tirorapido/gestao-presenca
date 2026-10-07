@@ -580,7 +580,7 @@ async function telaGestorPainel() {
 
     <div class="card">
       <h2>Registrar ocorrência</h2>
-      <p style="font-size:12px;color:#666;margin-top:0;">Atestado, não comparecimento, folga concedida ou troca — não conta como falta comum no relatório.</p>
+      <p style="font-size:12px;color:#666;margin-top:0;"><strong>Falta, descontar o dia:</strong> conta como falta e desconta. <strong>Atestado médico</strong> e <strong>Folga concedida</strong>: o dia fica zerado (sem pagamento e sem desconto).</p>
       <label>Colaborador</label>
       <select id="oColaborador">
         ${colaboradoresOrdenados().map(c => `<option value="${c.id}" style="text-transform:uppercase;">${c.nome}</option>`).join('')}
@@ -589,13 +589,12 @@ async function telaGestorPainel() {
       <input type="date" id="oData" value="${todayStr()}">
       <label>Tipo de ocorrência</label>
       <select id="oTipo">
+        <option value="falta_descontar">Falta, descontar o dia</option>
         <option value="atestado">Atestado médico</option>
-        <option value="falta_justificada">Não compareceu</option>
         <option value="folga">Folga concedida</option>
-        <option value="troca">Troca de plantão</option>
       </select>
       <label>Observação (opcional)</label>
-      <input id="oObs" type="text" placeholder="Ex: troca com Fulano no dia 15">
+      <input id="oObs" type="text" placeholder="Ex: atestado entregue em 10/09">
       <button class="action-btn entrada" onclick="window.__salvarOcorrencia()">+ Registrar ocorrência</button>
     </div>
 
@@ -1020,11 +1019,21 @@ window.__salvarEdicaoMEI = async (colaboradorId, data) => {
 };
 
 const TIPOS_OCORRENCIA = {
+  falta_descontar: { label: "Falta, descontar o dia", cor: "#c0392b" },
   atestado: { label: "Atestado médico", cor: "#0A0A0A" },
-  falta_justificada: { label: "Não compareceu", cor: "#6B6B6B" },
   folga: { label: "Folga concedida", cor: "#1e7a46" },
-  troca: { label: "Troca de plantão", cor: "#E2001A" },
+  // Chaves antigas (registros de teste): continuam aparecendo no relatório
+  falta_justificada: { label: "Falta, descontar o dia", cor: "#c0392b" }, // era "Não compareceu"
+  troca: { label: "Troca de plantão (antiga)", cor: "#6B6B6B" },
 };
+
+// Efeito de cada ocorrência no cálculo:
+//  'falta'  -> conta como falta, desconta o dia e não paga nada
+//  'zerado' -> dia zerado: sem pagamento, sem desconto e sem passagem
+function efeitoOcorrencia(chave) {
+  if (chave === 'falta_descontar' || chave === 'falta_justificada') return 'falta';
+  return 'zerado';
+}
 
 window.__salvarOcorrencia = async () => {
   const colaboradorId = document.getElementById('oColaborador').value;
@@ -1089,69 +1098,88 @@ window.__removerOcorrencia = async (id) => {
   window.__gerarRelatorio();
 };
 
-function calcularValorDoDia(c, dia) {
+// Cálculo financeiro de UM dia. Soma dos dias = total do mês (a passagem NÃO entra no total).
+function calcularFinanceiroDia(c, dia) {
   const regs = dia.registros;
-  const temOcorrenciaJustificando = !!dia.ocorrenciaTipo;
-  let valor = 0;
+  const fin = {
+    diaria: 0, passagem: 0, extra: 0, dobra: 0, desconto: 0, total: 0,
+    ehFalta: false, zerado: false, presente: false,
+    presencial: false, home: false, temExtra: false, temDobra: false,
+  };
+
+  const efeito = dia.ocorrenciaChave ? efeitoOcorrencia(dia.ocorrenciaChave) : null;
+  const faltaMarcada = regs.some(r => r.falta === true);
+
+  // Atestado / Folga: dia zerado (sem pagamento, sem desconto, sem passagem) — mesmo com presença registrada
+  if (efeito === 'zerado') {
+    fin.zerado = true;
+    return fin;
+  }
+
+  // Falta (por ocorrência OU marcada na edição do ponto) = uma falta só, com um desconto só
+  if (efeito === 'falta' || faltaMarcada) {
+    // CLT: valor do dia = salário ÷ 30. MEI: valor de falta cadastrado.
+    const valorFalta = c.regime === 'clt' ? ((c.salario || 0) / 30) : (c.valorFalta || 0);
+    fin.ehFalta = true;
+    fin.desconto = valorFalta;
+    fin.total = -valorFalta;
+    return fin;
+  }
+
+  const valorDiariaDoDia = ehDiaEspecial(dia.data)
+    ? (c.valorDiariaEspecial || c.valorDiaria || 0)
+    : (c.valorDiaria || 0);
 
   if (c.regime === 'clt') {
-    const faltaReg = regs.find(r => r.falta === true);
-    if (faltaReg && !temOcorrenciaJustificando) {
-      valor -= (c.valorFalta || 0);
-      return valor; // dia de falta não soma mais nada além do desconto
-    }
-
-    const temRegistroPrincipal = regs.some(r => r.entrada || r.modalidade);
-    if (temRegistroPrincipal) {
-      valor += ehDiaEspecial(dia.data) ? (c.valorDiariaEspecial || c.valorDiaria || 0) : (c.valorDiaria || 0);
-    }
-    const regPresencial = regs.find(r => r.modalidade === 'presencial');
-    if (regPresencial) valor += (c.valorPassagem || 0);
-
-    const extraReg = regs.find(r => r.tipo === 'plantao_extra');
-    if (extraReg) valor += (c.valorPlantaoExtra || 0);
-
+    const temRegistro = regs.some(r => r.entrada || r.modalidade || r.tipo === 'plantao_extra');
+    const regPresencial = regs.some(r => r.modalidade === 'presencial');
+    const temExtra = regs.some(r => r.tipo === 'plantao_extra');
     const unidadesDoDia = regs.filter(r => r.unidade).map(r => ({ unidade: r.unidade, hora: r.entrada || r.hora || '00:00' }));
-    const unidadesUnicas = new Set(unidadesDoDia.map(u => u.unidade));
-    if (unidadesUnicas.size >= 2) {
+
+    fin.presente = regs.some(r => r.entrada);
+    fin.presencial = regPresencial;
+    fin.home = regs.some(r => r.modalidade === 'home_office');
+    fin.temExtra = temExtra;
+    if (temRegistro) fin.diaria = valorDiariaDoDia;
+    if (regPresencial) fin.passagem = (c.valorPassagem || 0);
+    if (temExtra) fin.extra = (c.valorPlantaoExtra || 0);
+
+    if (new Set(unidadesDoDia.map(u => u.unidade)).size >= 2) {
       const ordenados = [...unidadesDoDia].sort((a, b) => a.hora.localeCompare(b.hora));
       const unidadeExtra = ordenados[ordenados.length - 1].unidade;
-      valor += unidadeExtra === 'Buritis' ? (c.valorDobraBuritis || 0) : (c.valorDobraPampulha || 0);
+      fin.temDobra = true;
+      fin.dobra = unidadeExtra === 'Buritis' ? (c.valorDobraBuritis || 0) : (c.valorDobraPampulha || 0);
     }
   } else {
-    const faltaReg = regs.find(r => r.falta === true);
-    if (faltaReg && !temOcorrenciaJustificando) {
-      valor -= (c.valorFalta || 0);
-      return valor;
-    }
-
     const unidadesDoDia = regs.filter(r => r.unidade).map(r => ({ unidade: r.unidade, hora: r.hora || '00:00' }));
-    const temHomeOffice = regs.some(r => r.tipo === 'home_office');
+    const temHome = regs.some(r => r.tipo === 'home_office');
     const temExtra = regs.some(r => r.tipo === 'plantao_extra');
-    const temAlgumRegistro = unidadesDoDia.length > 0 || temHomeOffice || temExtra;
 
-    if (temAlgumRegistro) {
-      valor += ehDiaEspecial(dia.data) ? (c.valorDiariaEspecial || c.valorDiaria || 0) : (c.valorDiaria || 0);
-    }
-    valor += unidadesDoDia.length * (c.valorPassagem || 0);
-    if (temExtra) valor += (c.valorPlantaoExtra || 0);
+    fin.presente = unidadesDoDia.length > 0 || temHome || temExtra;
+    fin.presencial = unidadesDoDia.length > 0;
+    fin.home = temHome;
+    fin.temExtra = temExtra;
+    if (fin.presente) fin.diaria = valorDiariaDoDia;
+    fin.passagem = unidadesDoDia.length * (c.valorPassagem || 0); // só quando veio de fato (home não gera)
+    if (temExtra) fin.extra = (c.valorPlantaoExtra || 0);
 
-    const unidadesUnicas = new Set(unidadesDoDia.map(u => u.unidade));
-    if (unidadesUnicas.size >= 2) {
+    if (new Set(unidadesDoDia.map(u => u.unidade)).size >= 2) {
       const ordenados = [...unidadesDoDia].sort((a, b) => a.hora.localeCompare(b.hora));
       const unidadeExtra = ordenados[ordenados.length - 1].unidade;
-      valor += unidadeExtra === 'Buritis' ? (c.valorDobraBuritis || 0) : (c.valorDobraPampulha || 0);
+      fin.temDobra = true;
+      fin.dobra = unidadeExtra === 'Buritis' ? (c.valorDobraBuritis || 0) : (c.valorDobraPampulha || 0);
     }
   }
 
-  return valor;
+  fin.total = fin.diaria + fin.extra + fin.dobra; // sem passagem
+  return fin;
 }
 
 function gerarDetalheDias(c, doColab, ocorrDoColab) {
   const porData = {};
   const ensureDay = (data) => {
     if (!porData[data]) {
-      porData[data] = { data, eventos: [], unidadesCount: 0, obsColaborador: '', ocorrenciaTipo: '', obsGestor: '', registros: [] };
+      porData[data] = { data, eventos: [], unidadesCount: 0, obsColaborador: '', ocorrenciaTipo: '', ocorrenciaChave: '', obsGestor: '', registros: [] };
     }
     return porData[data];
   };
@@ -1196,20 +1224,25 @@ function gerarDetalheDias(c, doColab, ocorrDoColab) {
     const dia = ensureDay(o.data);
     const tipoInfo = TIPOS_OCORRENCIA[o.tipo] || { label: o.tipo };
     dia.ocorrenciaTipo = tipoInfo.label;
+    dia.ocorrenciaChave = o.tipo;
     dia.obsGestor = o.observacao || '';
   });
 
   return Object.values(porData)
     .sort((a, b) => a.data.localeCompare(b.data))
-    .map(dia => ({
-      data: dia.data,
-      evento: dia.eventos.join(' + ') || '—',
-      obsColaborador: dia.obsColaborador,
-      ocorrenciaTipo: dia.ocorrenciaTipo,
-      obsGestor: dia.obsGestor,
-      destaque: dia.unidadesCount >= 2 ? 'DIA COM 2 UNIDADES' : '',
-      valorDia: formatarMoeda(calcularValorDoDia(c, dia)),
-    }));
+    .map(dia => {
+      const fin = calcularFinanceiroDia(c, dia);
+      return {
+        data: dia.data,
+        evento: dia.eventos.join(' + ') || '—',
+        obsColaborador: dia.obsColaborador,
+        ocorrenciaTipo: dia.ocorrenciaTipo,
+        obsGestor: dia.obsGestor,
+        destaque: dia.unidadesCount >= 2 ? 'DIA COM 2 UNIDADES' : '',
+        fin,
+        valorDia: formatarMoeda(fin.total),
+      };
+    });
 }
 
 let ultimoRelatorio = { mes: null, linhas: [] };
@@ -1229,66 +1262,40 @@ window.__gerarRelatorio = async () => {
     const linhas = colaboradoresOrdenados().map(c => {
       const doColab = registros.filter(r => r.colaboradorId === c.id && r.data.startsWith(mes));
       const ocorrDoColab = ocorrencias.filter(o => o.colaboradorId === c.id && o.data.startsWith(mes));
-      const datasComOcorrencia = new Set(ocorrDoColab.map(o => o.data));
       const resumoOcorrencias = Object.entries(
         ocorrDoColab.reduce((acc, o) => { acc[o.tipo] = (acc[o.tipo] || 0) + 1; return acc; }, {})
       ).map(([tipo, qtd]) => `${(TIPOS_OCORRENCIA[tipo] || {label: tipo}).label}: ${qtd}`).join(' · ') || '—';
 
+      // Cada dia já vem com seu financeiro calculado; o mês é a SOMA dos dias
       const detalheDias = gerarDetalheDias(c, doColab, ocorrDoColab);
+      const soma = (campo) => detalheDias.reduce((acc, d) => acc + d.fin[campo], 0);
+      const contar = (campo) => detalheDias.filter(d => d.fin[campo]).length;
+
+      const faltas = contar('ehFalta');
+      const diasPresenca = contar('presente');
+      const diasPresencial = contar('presencial');
+      const diasHomeOffice = contar('home');
+      const qtdExtras = contar('temExtra');
+      const qtdDobras = contar('temDobra');
+
+      const valorDiariaTotal = soma('diaria');
+      const valorPassagemTotal = soma('passagem');
+      const valorExtraTotal = soma('extra');
+      const valorDobraTotal = soma('dobra');
+      const valorFaltaTotal = soma('desconto');
 
       if (c.regime === 'clt') {
-        const diasPresenca = doColab.filter(r => r.entrada && r.falta !== true).length;
-        const faltas = doColab.filter(r => r.falta === true && !datasComOcorrencia.has(r.data)).length;
-        const totalHoras = doColab.reduce((soma, r) => soma + calcularHoras(r), 0);
-        const diasPresencial = doColab.filter(r => r.modalidade === 'presencial').length;
-        const diasHomeOffice = doColab.filter(r => r.modalidade === 'home_office').length;
-        const plantoesExtrasCLT = doColab.filter(r => r.tipo === 'plantao_extra').length;
-
-        // Dias com registro (para diária, conta presencial + home office)
-        const datasComRegistroCLT = new Set(
-          doColab.filter(r => r.entrada || r.modalidade || r.tipo === 'plantao_extra').map(r => r.data)
-        );
-
-        // Dobra: dia em que a unidade do plantão normal difere da unidade do plantão extra
-        const porDiaUnidadeCLT = {};
-        doColab.forEach(r => {
-          if (r.unidade) {
-            if (!porDiaUnidadeCLT[r.data]) porDiaUnidadeCLT[r.data] = [];
-            // hora de referência: entrada (registro principal) ou hora (plantão extra)
-            porDiaUnidadeCLT[r.data].push({ unidade: r.unidade, hora: r.entrada || r.hora || '00:00' });
-          }
-        });
-        const diasDuplaUnidadeCLT = Object.values(porDiaUnidadeCLT).filter(arr => new Set(arr.map(x => x.unidade)).size >= 2).length;
-
+        const totalHoras = doColab.reduce((acc, r) => acc + calcularHoras(r), 0);
         const valorSalario = c.salario || 0;
-        const valorDiariaTotal = Array.from(datasComRegistroCLT).reduce((soma, dataDia) => {
-          const valorDoDia = ehDiaEspecial(dataDia) ? (c.valorDiariaEspecial || c.valorDiaria || 0) : (c.valorDiaria || 0);
-          return soma + valorDoDia;
-        }, 0);
-        const valorPassagemTotal = diasPresencial * (c.valorPassagem || 0);
-        const valorExtraTotal = plantoesExtrasCLT * (c.valorPlantaoExtra || 0);
-
-        // Dobra: no dia com 2 unidades, cobra só o valor da unidade "extra" (a segunda visitada no dia, pelo horário)
-        let valorDobraTotal = 0;
-        Object.values(porDiaUnidadeCLT).forEach(registrosDoDia => {
-          const unidadesUnicas = new Set(registrosDoDia.map(x => x.unidade));
-          if (unidadesUnicas.size >= 2) {
-            const ordenados = [...registrosDoDia].sort((a, b) => a.hora.localeCompare(b.hora));
-            const unidadeExtra = ordenados[ordenados.length - 1].unidade;
-            valorDobraTotal += unidadeExtra === 'Buritis' ? (c.valorDobraBuritis || 0) : (c.valorDobraPampulha || 0);
-          }
-        });
-
-        const valorFaltaTotal = faltas * (c.valorFalta || 0);
-        const valorTotal = valorSalario + valorDiariaTotal + valorPassagemTotal + valorExtraTotal + valorDobraTotal - valorFaltaTotal;
-
+        // Total = salário + dias trabalhados − descontos (a passagem fica só na coluna dela)
+        const valorTotal = valorSalario + valorDiariaTotal + valorExtraTotal + valorDobraTotal - valorFaltaTotal;
         return {
           nome: c.nome, regime: c.regime,
           presenca: `${diasPresenca} dias`,
           faltas: `${faltas} falta(s)`,
           faltasCor: faltas > 0 ? '#c0392b' : '#1e7a46',
-          plantaoOutraUnidade: `${diasDuplaUnidadeCLT}`,
-          plantaoExtra: `${plantoesExtrasCLT}`,
+          plantaoOutraUnidade: `${qtdDobras}`,
+          plantaoExtra: `${qtdExtras}`,
           horas: formatarHoras(totalHoras),
           modalidade: `🏢 ${diasPresencial} · 🏠 ${diasHomeOffice}`,
           ocorrencias: resumoOcorrencias,
@@ -1302,54 +1309,17 @@ window.__gerarRelatorio = async () => {
           valorTotal: formatarMoeda(valorTotal),
         };
       } else {
-        const porDiaUnidade = {};
-        doColab.filter(r => r.unidade).forEach(r => {
-          if (!porDiaUnidade[r.data]) porDiaUnidade[r.data] = [];
-          porDiaUnidade[r.data].push({ unidade: r.unidade, hora: r.hora || '00:00' });
-        });
-        const diasComUnidade = Object.keys(porDiaUnidade).length;
-        const diasDuplaUnidade = Object.values(porDiaUnidade).filter(u => u.length >= 2).length;
-        const plantoesExtras = doColab.filter(r => r.tipo === 'plantao_extra').length;
-        const diasComHomeOffice = new Set(doColab.filter(r => r.tipo === 'home_office').map(r => r.data)).size;
-        const totalVisitasUnidade = doColab.filter(r => r.unidade).length; // conta cada trajeto, inclusive nos dias dobrados
-
-        const datasComRegistro = new Set(
-          doColab.filter(r => r.unidade || r.tipo === 'plantao_extra' || r.tipo === 'home_office').map(r => r.data)
-        );
-
-        // Falta é sempre manual — marcada pelo gestor em "Editar ponto de um colaborador"
-        const faltas = doColab.filter(r => r.falta === true && !datasComOcorrencia.has(r.data)).length;
-
-        // Diária calculada dia a dia — usa o valor especial em sábado/domingo/feriado
-        const valorDiariaTotal = Array.from(datasComRegistro).reduce((soma, dataDia) => {
-          const valorDoDia = ehDiaEspecial(dataDia) ? (c.valorDiariaEspecial || c.valorDiaria || 0) : (c.valorDiaria || 0);
-          return soma + valorDoDia;
-        }, 0);
-        const valorPassagemTotal = totalVisitasUnidade * (c.valorPassagem || 0);
-        const valorExtraTotal = plantoesExtras * (c.valorPlantaoExtra || 0);
-
-        // Dobra: no dia com 2 unidades, cobra só o valor da unidade "extra" (a segunda visitada no dia, pelo horário)
-        let valorDobraTotal = 0;
-        Object.values(porDiaUnidade).forEach(registrosDoDia => {
-          if (registrosDoDia.length >= 2) {
-            const ordenados = [...registrosDoDia].sort((a, b) => a.hora.localeCompare(b.hora));
-            const unidadeExtra = ordenados[ordenados.length - 1].unidade; // a última registrada no dia
-            valorDobraTotal += unidadeExtra === 'Buritis' ? (c.valorDobraBuritis || 0) : (c.valorDobraPampulha || 0);
-          }
-        });
-
-        const valorFaltaTotal = faltas * (c.valorFalta || 0);
-        const valorTotal = valorDiariaTotal + valorPassagemTotal + valorExtraTotal + valorDobraTotal - valorFaltaTotal;
-
+        // Total = diárias + extra + dobra − desconto (a passagem fica só na coluna dela)
+        const valorTotal = valorDiariaTotal + valorExtraTotal + valorDobraTotal - valorFaltaTotal;
         return {
           nome: c.nome, regime: c.regime,
-          presenca: `${datasComRegistro.size} dias`,
+          presenca: `${diasPresenca} dias`,
           faltas: `${faltas} falta(s)`,
           faltasCor: faltas > 0 ? '#c0392b' : '#1e7a46',
-          plantaoOutraUnidade: `${diasDuplaUnidade}`,
-          plantaoExtra: `${plantoesExtras}`,
+          plantaoOutraUnidade: `${qtdDobras}`,
+          plantaoExtra: `${qtdExtras}`,
           horas: '—',
-          modalidade: `🏢 ${diasComUnidade} · 🏠 ${diasComHomeOffice}`,
+          modalidade: `🏢 ${diasPresencial} · 🏠 ${diasHomeOffice}`,
           ocorrencias: resumoOcorrencias,
           detalheDias,
           valorBase: formatarMoeda(valorDiariaTotal),
@@ -1359,7 +1329,6 @@ window.__gerarRelatorio = async () => {
           valorDobraTotal: formatarMoeda(valorDobraTotal),
           valorFaltaTotal: formatarMoeda(valorFaltaTotal),
           valorTotal: formatarMoeda(valorTotal),
-          detalheDias,
         };
       }
     });
@@ -1412,12 +1381,17 @@ window.__gerarRelatorio = async () => {
               ${l.detalheDias.length === 0
                 ? `<p style="font-size:12px;color:#999;margin:8px 0 0;">Nenhum registro neste mês.</p>`
                 : `<table style="margin-top:8px;">
-                    <tr><th>Data</th><th>O que aconteceu</th><th>Valor do dia</th><th>Obs. colaborador</th><th>Ocorrência</th><th>Obs. gestor</th><th>Alerta</th></tr>
+                    <tr><th>Data</th><th>O que aconteceu</th><th>Diárias</th><th>Passagem</th><th>Extra</th><th>Dobra</th><th>Desconto falta</th><th>Total do dia</th><th>Obs. colaborador</th><th>Ocorrência</th><th>Obs. gestor</th><th>Alerta</th></tr>
                     ${l.detalheDias.map(d => `
                       <tr>
                         <td style="white-space:nowrap;">${fmtDatePt(d.data)}</td>
                         <td style="font-size:12px;">${d.evento}</td>
-                        <td style="font-size:12px;font-weight:bold;color:${d.valorDia.includes('-') ? '#c0392b' : '#1e7a46'};">${d.valorDia}</td>
+                        <td style="font-size:11px;">${d.fin.diaria ? formatarMoeda(d.fin.diaria) : '—'}</td>
+                        <td style="font-size:11px;">${d.fin.passagem ? formatarMoeda(d.fin.passagem) : '—'}</td>
+                        <td style="font-size:11px;">${d.fin.extra ? formatarMoeda(d.fin.extra) : '—'}</td>
+                        <td style="font-size:11px;">${d.fin.dobra ? formatarMoeda(d.fin.dobra) : '—'}</td>
+                        <td style="font-size:11px;color:#c0392b;">${d.fin.desconto ? formatarMoeda(d.fin.desconto) : '—'}</td>
+                        <td style="font-size:12px;font-weight:bold;color:${d.fin.total < 0 ? '#c0392b' : '#1e7a46'};">${d.valorDia}</td>
                         <td style="font-size:11px;color:#555;">${d.obsColaborador || '—'}</td>
                         <td style="font-size:11px;color:#555;">${d.ocorrenciaTipo || '—'}</td>
                         <td style="font-size:11px;color:#555;">${d.obsGestor || '—'}</td>
@@ -1468,8 +1442,11 @@ window.__exportarRelatorioCSV = () => {
       linhasCSV.push(['—', 'Nenhum registro neste mês', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
     } else {
       l.detalheDias.forEach(d => {
+        const vazioSeZero = (v) => v ? formatarMoeda(v) : '';
         linhasCSV.push([
-          fmtDatePt(d.data), d.evento, '', '', '', '', '', '', '', '', '', '', '', d.valorDia,
+          fmtDatePt(d.data), d.evento, '', '', '', '', '', '',
+          vazioSeZero(d.fin.diaria), vazioSeZero(d.fin.passagem), vazioSeZero(d.fin.extra),
+          vazioSeZero(d.fin.dobra), vazioSeZero(d.fin.desconto), d.valorDia,
           d.obsColaborador || '', d.ocorrenciaTipo || '', d.obsGestor || '', d.destaque || ''
         ]);
       });
